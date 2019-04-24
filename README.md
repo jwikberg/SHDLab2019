@@ -209,4 +209,103 @@ Then select the `azuredeploy.json` file as template by first clicking the dots n
 
 Click on the `Deploy Azure App Service` step and select WebApi.zip from our linked artificats as `Package or folder`.
 
-Save and then create a new release by clicking `Release > Create release` next to the save button.
+Save your pipeline.
+
+## 5. Swagger documentation
+
+By adding Swagger documentation generation for our WebApi we get an UI for testing all endpoints.
+
+First, open `WebApi.csproj` and replace the contents with the following to add the required package and enable xml documentation generation:
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>netcoreapp2.2</TargetFramework>
+    <AspNetCoreHostingModel>InProcess</AspNetCoreHostingModel>
+  </PropertyGroup>
+    <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DocumentationFile>bin\Debug\netcoreapp2.2\WebApi.xml</DocumentationFile>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <DocumentationFile>bin\Release\netcoreapp2.2\WebApi.xml</DocumentationFile>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.App"/>
+    <PackageReference Include="Microsoft.AspNetCore.Razor.Design" Version="2.2.0" PrivateAssets="All"/>
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="4.0.1"/>
+  </ItemGroup>
+</Project>
+```
+Open `Startup.cs` and replace the contents with:
+
+```cs
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.HttpsPolicy;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Swashbuckle.AspNetCore.Swagger;
+
+namespace WebApi
+{
+    public class Startup
+    {
+        public Startup(IConfiguration configuration)
+        {
+            Configuration = configuration;
+        }
+
+        public IConfiguration Configuration { get; }
+
+        // This method gets called by the runtime. Use this method to add services to the container.
+        public void ConfigureServices(IServiceCollection services)
+        {
+            services.AddMvc().SetCompatibilityVersion(CompatibilityVersion.Version_2_2);
+
+            services.AddSwaggerGen(c =>
+            {
+                c.SwaggerDoc("v1", new Info { Title = "SHD Lab", Version = "v1" });
+
+                var filePath = Path.Combine(System.AppContext.BaseDirectory, "WebApi.xml");
+                c.IncludeXmlComments(filePath);
+            });
+        }
+
+        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public void Configure(IApplicationBuilder app, IHostingEnvironment env)
+        {
+            if (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+            }
+            else
+            {
+                // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
+                app.UseHsts();
+            }
+
+            app.UseSwagger();
+
+            app.UseSwaggerUI(c =>
+            {
+                c.SwaggerEndpoint("/swagger/v1/swagger.json", "SHD Lab V1");
+            });
+
+            app.UseHttpsRedirection();
+            app.UseMvc();
+        }
+    }
+}
+```
+
+Commit the changes and wait for the build and release to complete, then you can head to [https://SHDLab-YOUR_INITIALS_HERE.azurewebsites.net/swagger](https://SHDLab-YOUR_INITIALS_HERE.azurewebsites.net/swagger) to see what we've accomplished so far.
