@@ -8,8 +8,7 @@
 
 ### VS Code Extensions
 1. [C#](https://marketplace.visualstudio.com/items?itemName=ms-vscode.csharp)
-2. [NuGet Package Manager](https://marketplace.visualstudio.com/items?itemName=jmrog.vscode-nuget-package-manager)
-3. [Azure Resource Manager Tools](https://marketplace.visualstudio.com/items?itemName=msazurermtools.azurerm-vscode-tools)
+2. [Azure Resource Manager Tools](https://marketplace.visualstudio.com/items?itemName=msazurermtools.azurerm-vscode-tools)
 
 ## 1. Azure DevOps project
 
@@ -21,10 +20,13 @@ First create the following folder structure locally:
 
 SHDLab  
 -- WebApi  
+-- WebApp  
 -- Tests  
 -- ARM  
 
 Use the .Net Core CLI to create a new WebApi project by navigating into the WebApi folder in your terminal/command prompt and run `dotnet new webapi` to generate the project.
+
+Navigate into the WebApp folder and run `dotnet new webapp` to generate a web app project that we'll use to 
 
 Then navigate into the Tests folder and run `dotnet new xunit` to generate a project for our tests that will use xUnit.
 
@@ -39,7 +41,7 @@ Build pipelines in Azure DevOps can be created through the classic GUI or with y
 
 Go to `Pipelines > Builds` in DevOps and create a new pipeline for your repo.
 
-Our build pipeline is very basic and only includes steps for restoring packages, building & publishing an artifact that we later can deploy to an AppService in Azure:
+Our build pipeline is very basic and only includes steps for restoring packages, building, testing & publishing the artifacts that we later can deploy to Azure:
 
 ```yaml
 resources:
@@ -69,7 +71,16 @@ steps:
     arguments: '--configuration Release'
 
 - task: DotNetCoreCLI@2
-  displayName: Publish
+  displayName: Publish App
+  inputs:
+    command: publish
+    publishWebProjects: true
+    projects: 'WebApp/*.csproj'
+    arguments: '--configuration Release --output $(build.artifactstagingdirectory)'
+    zipAfterPublish: true
+
+- task: DotNetCoreCLI@2
+  displayName: Publish Api
   inputs:
     command: publish
     publishWebProjects: false
@@ -82,6 +93,12 @@ steps:
   inputs:
     PathtoPublish: '$(build.artifactstagingdirectory)'
   condition: succeededOrFailed()
+
+- task: PublishBuildArtifacts@1
+  displayName: 'Publish Artifact: ARM'
+  inputs:
+    PathtoPublish: ARM
+    ArtifactName: ARM
 ```
 
 ## 4. Deployment using Azure Resource Manager
@@ -96,7 +113,7 @@ To allow DevOps to deploy to and create resources in Azure, we need to create a 
 
 Go to `Project settings > Pipelines > Service connections` in DevOps and create a new ARM service connection.
 
-Use DevOps-SHDLab as name for the connection and select your resource group (you'll be prompted to authenticate yourself first), then precc OK.
+Use DevOps-SHDLab as name for the connection and select your resource group (you'll be prompted to authenticate yourself first), then press OK.
 
 ### 4.3 ARM Template
 
@@ -109,27 +126,128 @@ Go to the ARM folder we created earlier, then create a file called `azuredeploy.
     "resources": [
         {
             "apiVersion": "2016-03-01",
-            "name": "[parameters('name')]",
+            "name": "[parameters('appName')]",
             "type": "Microsoft.Web/sites",
             "properties": {
-                "name": "[parameters('name')]",
+                "name": "[parameters('appName')]",
                 "siteConfig": {
-                    "appSettings": []
+                    "appSettings": [
+                        {
+                            "name": "ApiName",
+                            "value": "[variables('apiName')]"
+                        },
+                        {
+                            "name": "ApplicationInsights:InstrumentationKey",
+                            "value": "[reference(concat('microsoft.insights/components/', parameters('appName'))).InstrumentationKey]"
+                        }
+                    ]
                 },
-                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('hostingPlanName'))]"
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appHostingPlanName'))]"
             },
             "location": "[resourceGroup().location]",
+            "resources": [
+                {
+                    "apiVersion": "2015-08-01",
+                    "name": "Microsoft.ApplicationInsights.AzureWebSites",
+                    "type": "siteextensions",
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Web/Sites', parameters('appName'))]"
+                    ],
+                    "properties": {
+                    }
+                }
+            ],
             "dependsOn": [
-                "[concat('Microsoft.Web/serverfarms/', parameters('hostingPlanName'))]"
+                "[concat('Microsoft.Web/serverfarms/', parameters('appHostingPlanName'))]",
+                "[resourceId('microsoft.insights/components/', parameters('appName'))]"
             ]
         },
         {
+            "type": "microsoft.insights/components",
+            "apiVersion": "2015-05-01",
+            "name": "[parameters('appName')]",
+            "location": "westeurope",
+            "tags": {
+                "applicationType": "web"
+            },
+            "kind": "web",
+            "properties": {
+                "Application_Type": "web",
+                "Flow_Type": "Redfield",
+                "Request_Source": "AppServiceEnablementCreate"
+            }
+        },
+        {
             "apiVersion": "2016-09-01",
-            "name": "[parameters('hostingPlanName')]",
+            "name": "[parameters('appHostingPlanName')]",
             "type": "Microsoft.Web/serverfarms",
             "location": "[resourceGroup().location]",
             "properties": {
-                "name": "[parameters('hostingPlanName')]",
+                "name": "[parameters('appHostingPlanName')]",
+                "workerSizeId": "0",
+                "numberOfWorkers": "1"
+            },
+            "sku": {
+                "Tier": "[parameters('sku')]",
+                "Name": "[parameters('skuCode')]"
+            }
+        },
+        {
+            "apiVersion": "2016-03-01",
+            "name": "[variables('apiName')]",
+            "type": "Microsoft.Web/sites",
+            "properties": {
+                "name": "[variables('apiName')]",
+                "siteConfig": {
+                    "appSettings": [
+                        {
+                            "name": "ApplicationInsights:InstrumentationKey",
+                            "value": "[reference(concat('microsoft.insights/components/', variables('apiName'))).InstrumentationKey]"
+                        }
+                    ]
+                },
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('apiHostingPlanName'))]"
+            },
+            "location": "[resourceGroup().location]",
+            "resources": [
+                {
+                    "apiVersion": "2015-08-01",
+                    "name": "Microsoft.ApplicationInsights.AzureWebSites",
+                    "type": "siteextensions",
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Web/Sites', variables('apiName'))]"
+                    ],
+                    "properties": {
+                    }
+                }
+            ],
+            "dependsOn": [
+                "[concat('Microsoft.Web/serverfarms/', variables('apiHostingPlanName'))]",
+                "[resourceId('microsoft.insights/components/', variables('apiName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Insights/components",
+            "apiVersion": "2015-05-01",
+            "name": "[variables('apiName')]",
+            "location": "westeurope",
+            "tags": {
+                "applicationType": "web"
+            },
+            "kind": "web",
+            "properties": {
+                "Application_Type": "web",
+                "Flow_Type": "Redfield",
+                "Request_Source": "AppServiceEnablementCreate"
+            }
+        },
+        {
+            "apiVersion": "2016-09-01",
+            "name": "[variables('apiHostingPlanName')]",
+            "type": "Microsoft.Web/serverfarms",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "name": "[variables('apiHostingPlanName')]",
                 "workerSizeId": "0",
                 "numberOfWorkers": "1"
             },
@@ -140,10 +258,10 @@ Go to the ARM folder we created earlier, then create a file called `azuredeploy.
         }
     ],
     "parameters": {
-        "name": {
+        "appName": {
             "type": "string"
         },
-        "hostingPlanName": {
+        "appHostingPlanName": {
             "type": "string"
         },
         "sku": {
@@ -152,6 +270,10 @@ Go to the ARM folder we created earlier, then create a file called `azuredeploy.
         "skuCode": {
             "type": "string"
         }
+    },
+    "variables": {
+        "apiName": "[concat(parameters('appName'), '-api')]",
+        "apiHostingPlanName": "[concat(parameters('appHostingPlanName'), 'Api')]"
     },
     "$schema": "http://schema.management.azure.com/schemas/2014-04-01-preview/deploymentTemplate.json#",
     "contentVersion": "1.0.0.0"
@@ -165,10 +287,10 @@ Create another file called `azuredeploy.parameters.json` with the following cont
     "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
     "contentVersion": "1.0.0.0",
     "parameters": {
-        "name": {
+        "appName": {
             "value": "SHDLab-YOUR_INITIALS_HERE"
         },
-        "hostingPlanName": {
+        "appHostingPlanName": {
             "value": "SHDLabPlan"
         },
         "sku": {
@@ -195,19 +317,22 @@ Commit the new files and changes.
 
 ### 4.4 Release pipeline
 
-Go to `Pipelines > Releases` in DevOps and create a new release pipeline. Use the `Azure App Service deployment` template.
+Go to `Pipelines > Releases` in DevOps and create a new release pipeline. Click `Empty job` at the top of the right blade.
 
 Click on `Add an artifact` and select your build pipleine.
 
 Click the lightning bolt icon and enable continuous deployment.
 
-Go to the `Tasks` tab and select DevOps-SHDLab as your subscription and manually enter SHDLab-YOUR_INITIALS_HERE as the name of your App Service.
-
-Click the + to add a new task and pick `Azure Resource Group Deployment`. Drag the new task to the top of the list.  
-Pick DevOps-SHDLab as your subscription, SHDLab as your resource group and West Europe as location.  
+Go to the `Tasks` tab, click the + to add a new task and pick `Azure Resource Group Deployment`.  
+Pick `DevOps-SHDLab` as your subscription, `SHDLab` as your resource group and `West Europe` as location.  
 Then select the `azuredeploy.json` file as template by first clicking the dots next to the field, then also select `azuredeploy.parameters.json` as template parameters.
 
-Click on the `Deploy Azure App Service` step and select WebApi.zip from our linked artificats as `Package or folder`.
+Add another new task and select `Azure App Service Deploy`.  
+Select `DevOps-SHDLab` as your subscription and manually enter `SHDLab-YOUR_INITIALS_HERE-api` as App Service name.
+Then select `WebApi.zip` from our linked artificats as Package or folder.
+
+Right click on the app service deploy task and clone it.  
+Change App Service name to `SHDLab-YOUR_INITIALS_HERE` and select `WebApp.zip` as package.
 
 Save your pipeline.
 
@@ -308,4 +433,267 @@ namespace WebApi
 }
 ```
 
-Commit the changes and wait for the build and release to complete, then you can head to [https://SHDLab-YOUR_INITIALS_HERE.azurewebsites.net/swagger](https://SHDLab-YOUR_INITIALS_HERE.azurewebsites.net/swagger) to see what we've accomplished so far.
+Commit the changes and wait for the build and release to complete, then you can head to [https://SHDLab-YOUR_INITIALS_HERE-api.azurewebsites.net/swagger](https://SHDLab-YOUR_INITIALS_HERE-api.azurewebsites.net/swagger) to see what we've accomplished so far.
+
+## 6. Application Insights
+
+>Azure Application Insights provides in-depth monitoring of your web application down to the code level.  
+>You can easily monitor your web application for availability, performance, and usage.  
+>You can also quickly identify and diagnose errors in your application without waiting for a user to report them.
+
+To add Application Insights to our projects, you'll first need to add the following package reference to `WebApi.csproj` and `WebApp.csproj`:
+
+```xml
+<PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" Version="2.6.1"/>
+```
+
+Then open `appsettings.json` in the WebApp and WebApi projects and add the following:
+
+```json
+"ApplicationInsights": {
+  "InstrumentationKey": ""
+}
+```
+
+Finally, open `program.cs` in both projects as well and replace the `CreateWebHostBuilder` method with the following:
+
+```cs
+public static IWebHostBuilder CreateWebHostBuilder(string[] args) =>
+    WebHost.CreateDefaultBuilder(args)
+        .UseApplicationInsights()
+        .UseStartup<Startup>();
+```
+
+Commit and push your changes.
+
+## 7. Adding a new API controller
+
+Create a new folder called `Models` to both the `WebApi` and `WebApp` projects and create a new file/class in both of them called `TodoItem.cs` and paste this:
+
+```cs
+namespace WebApi.Models
+{
+    public class TodoItem
+    {
+        public long Id { get; set; }
+        public string Name { get; set; }
+        public bool IsComplete { get; set; }
+    }
+}
+```
+
+Replace `namespace WebApi.Models` with `namespace WebApp.Models` in the web app model.
+
+Create a new file/class called `TodoContext.cs` in the Models folder of the `WebApi` project:
+
+```cs
+using Microsoft.EntityFrameworkCore;
+
+namespace WebApi.Models
+{
+    public class TodoContext : DbContext
+    {
+        public TodoContext(DbContextOptions<TodoContext> options)
+            : base(options)
+        {
+        }
+
+        public DbSet<TodoItem> TodoItems { get; set; }
+    }
+}
+```
+
+Open `Startup.cs` in the `WebApi` project and add the following above `services.AddMvc().SetCompatibilityVersion(CompatibilityVersion.Version_2_2);`:
+
+```cs
+services.AddDbContext<TodoContext>(opt =>
+    opt.UseInMemoryDatabase("TodoList"));
+```
+
+Also add the following usings to that class as well:
+```cs
+using Microsoft.EntityFrameworkCore;
+using WebApi.Models;
+```
+
+Rename `ValuesController.cs` to `TodosController.cs` and replace the contents with the following:
+
+```cs
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using WebApi.Models;
+
+namespace WebApi.Controllers
+{
+    [Produces("application/json")]
+    [Route("api/[controller]")]
+    [ApiController]
+    public class TodosController : ControllerBase
+    {
+        private readonly TodoContext _context;
+        
+        public TodosController(TodoContext context)
+        {
+            _context = context;
+
+            if (_context.TodoItems.Count() == 0)
+            {
+                // Create a new TodoItem if collection is empty,
+                // which means you can't delete all TodoItems.
+                _context.TodoItems.Add(new TodoItem { Name = "Item1" });
+                _context.SaveChanges();
+            }
+        }
+        
+        // GET: api/Todo
+        [HttpGet]
+        public async Task<ActionResult<IEnumerable<TodoItem>>> GetTodoItems()
+        {
+            return await _context.TodoItems.ToListAsync();
+        }
+
+        // GET: api/Todo/5
+        [HttpGet("{id}")]
+        public async Task<ActionResult<TodoItem>> GetTodoItem(long id)
+        {
+            var todoItem = await _context.TodoItems.FindAsync(id);
+
+            if (todoItem == null)
+            {
+                return NotFound();
+            }
+
+            return todoItem;
+        }
+
+        // POST: api/Todo
+        [HttpPost]
+        public async Task<ActionResult<TodoItem>> PostTodoItem(TodoItem item)
+        {
+            _context.TodoItems.Add(item);
+            await _context.SaveChangesAsync();
+
+            return CreatedAtAction(nameof(GetTodoItem), new { id = item.Id }, item);
+        }
+
+        // PUT: api/Todo/5
+        [HttpPut("{id}")]
+        public async Task<IActionResult> PutTodoItem(long id, TodoItem item)
+        {
+            if (id != item.Id)
+            {
+                return BadRequest();
+            }
+
+            _context.Entry(item).State = EntityState.Modified;
+            await _context.SaveChangesAsync();
+
+            return NoContent();
+        }
+
+        // DELETE: api/Todo/5
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteTodoItem(long id)
+        {
+            var todoItem = await _context.TodoItems.FindAsync(id);
+
+            if (todoItem == null)
+            {
+                return NotFound();
+            }
+
+            _context.TodoItems.Remove(todoItem);
+            await _context.SaveChangesAsync();
+
+            return NoContent();
+        }
+    }
+}
+```
+
+Open `Index.cshtml.cs` in the web app and replace the contents with:
+
+```cs
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Net.Http;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json;
+using WebApp.Models;
+
+namespace WebApp.Pages
+{
+    public class IndexModel : PageModel
+    {
+        private readonly IHttpClientFactory _clientFactory;
+        private readonly string _apiBaseUrl;
+
+        public IndexModel(IHttpClientFactory clientFactory, IConfiguration configuration)
+        {
+            _clientFactory = clientFactory;
+            _apiBaseUrl = "https://" + configuration.GetValue<string>("ApiName") + ".azurewebsites.net";
+        }
+
+        public List<TodoItem> TodoItems = new List<TodoItem>();
+
+        public async Task OnGetAsync()
+        {
+            var client = _clientFactory.CreateClient();
+            var response = await client.GetAsync(_apiBaseUrl + "/api/Todos");
+            TodoItems = await response.Content.ReadAsAsync<List<TodoItem>>();
+        }
+
+        public async Task<IActionResult> OnGetDeleteAsync(int id) 
+        {
+            Console.WriteLine("ID:" + id);
+            var client = _clientFactory.CreateClient();
+            await client.DeleteAsync(_apiBaseUrl + "/api/Todos/" + id);
+
+            return RedirectToPage();
+        }
+    }
+}
+```
+
+Then open `Index.cshtml` and replace the contents with:
+
+```cs
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "Home page";
+}
+
+<div class="text-center">
+    <h1 class="display-4">Welcome</h1>
+    <p>Learn about <a href="https://docs.microsoft.com/aspnet/core">building Web apps with ASP.NET Core</a>.</p>
+</div>
+<h1>Todo Items</h1>
+<div class="col-6">
+    @foreach (var todoItem in Model.TodoItems)
+    {
+        <ul class="list-group">
+            <li class="list-group-item">
+                <p>Name: @todoItem.Name</p>
+                <p>Complete: @todoItem.IsComplete</p>
+                <a class="btn btn-primary" role="button" asp-page-handler="Delete" asp-route-id="@todoItem.Id">Delete</a>
+            </li>
+        </ul>
+    }
+</div>
+```
+
+Finally, open `Startup.cs` in the web app and the following below `services.AddMvc().SetCompatibilityVersion(CompatibilityVersion.Version_2_2);`:
+
+```cs
+services.AddHttpClient();
+```
