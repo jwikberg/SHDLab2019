@@ -26,7 +26,7 @@ SHDLab
 
 Use the .Net Core CLI to create a new WebApi project by navigating into the WebApi folder in your terminal/command prompt and run `dotnet new webapi` to generate the project.
 
-The navigate into the Tests folder and run `dotnet new xunit` to generate a project for our tests that will use xUnit.
+Then navigate into the Tests folder and run `dotnet new xunit` to generate a project for our tests that will use xUnit.
 
 Initilize a git repo with `git init` in the SHDLab folder then add [this .gitignore to that folder as well](https://raw.githubusercontent.com/jwikberg/SHDLab2019/master/.gitignore).  
 Commit all changes.
