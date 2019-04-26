@@ -93,12 +93,6 @@ steps:
   inputs:
     PathtoPublish: '$(build.artifactstagingdirectory)'
   condition: succeededOrFailed()
-
-- task: PublishBuildArtifacts@1
-  displayName: 'Publish Artifact: ARM'
-  inputs:
-    PathtoPublish: ARM
-    ArtifactName: ARM
 ```
 
 ## 4. Deployment using Azure Resource Manager
